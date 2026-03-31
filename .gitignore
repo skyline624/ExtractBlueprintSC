@@ -17,6 +17,7 @@
 *.exe
 *.pdb
 *.cache
+!tools/*.exe
 
 # NuGet
 packages/
