@@ -48,8 +48,9 @@ public sealed class StarBreakerExtractor
 
         // 2. Extraire le DCB du P4K
         var dcbOutputDir = Path.Combine(outputDir, "dcb");
+        var dcbFileName = Path.GetFileName(dcbPath);
         await RunCommandAsync(
-            [_options.Value.StarBreakerCliPath, "p4k", "extract", p4kPath, "--filter", dcbPath, "--output", dcbOutputDir],
+            [_options.Value.StarBreakerCliPath, "p4k", "extract", "--p4k", p4kPath, "--regex", $"{dcbFileName.Replace(".", "\\.")}$", "--output", dcbOutputDir],
             cancellationToken);
 
         var extractedDcb = Path.Combine(dcbOutputDir, dcbPath.Replace('/', Path.DirectorySeparatorChar));
@@ -59,7 +60,7 @@ public sealed class StarBreakerExtractor
         // 3. Convertir le DCB en JSON
         var jsonOutputDir = Path.Combine(outputDir, "dcb_json");
         await RunCommandAsync(
-            [_options.Value.StarBreakerCliPath, "dcb", "extract", extractedDcb, "--output", jsonOutputDir],
+            [_options.Value.StarBreakerCliPath, "dcb", "extract", "--dcb", extractedDcb, "--output", jsonOutputDir, "--format", "json"],
             cancellationToken);
 
         var recordsDir = Path.Combine(jsonOutputDir, "libs", "foundry", "records");
@@ -79,7 +80,7 @@ public sealed class StarBreakerExtractor
         _logger.LogDebug("Recherche du fichier DCB dans {P4K}...", p4kPath);
 
         var output = await RunCommandWithOutputAsync(
-            [_options.Value.StarBreakerCliPath, "p4k", "list", p4kPath, "--filter", "*.dcb"],
+            [_options.Value.StarBreakerCliPath, "p4k", "list", "--p4k", p4kPath, "--filter", "*.dcb"],
             cancellationToken);
 
         foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))

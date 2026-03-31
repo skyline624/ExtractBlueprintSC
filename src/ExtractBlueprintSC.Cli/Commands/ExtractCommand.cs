@@ -95,7 +95,7 @@ public static class ExtractCommand
                     }
                     catch (ExtractionException ex)
                     {
-                        AnsiConsole.MarkupLine($"[red]Erreur d'extraction :[/] {ex.Message}");
+                        AnsiConsole.MarkupLine($"[red]Erreur d'extraction :[/] {ex.Message.EscapeMarkup()}");
                     }
                     catch (OperationCanceledException)
                     {
