@@ -1,0 +1,39 @@
+# Build results
+**/bin/
+**/obj/
+**/[Ll]og/
+**/[Ll]ogs/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+*.dll
+*.exe
+*.pdb
+*.cache
+
+# NuGet
+packages/
+*.nupkg
+
+# Rider / IntelliJ
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output
+output/
+extracted/
+*.json
+!appsettings.json
