@@ -3,6 +3,7 @@
 **/obj/
 **/[Ll]og/
 **/[Ll]ogs/
+/bin/
 
 # Visual Studio
 .vs/

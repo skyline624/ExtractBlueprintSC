@@ -15,6 +15,8 @@ Ce projet permet d'extraire les données de crafting (blueprints, ressources, mi
 
 ```
 ExtractBlueprintSC/
+├── bin/                                  # Exécutable compilé
+│   └── ExtractBlueprintSC                # Exécutable autonome
 ├── ExtractBlueprintSC.sln
 └── src/
     ├── ExtractBlueprintSC.Core/              # Entités métier + interfaces
@@ -77,21 +79,26 @@ ExtractBlueprintSC/
 
 ```bash
 # Cloner le repository
-cd /chemin/vers/ExtractBlueprintSC
+git clone https://github.com/skyline624/ExtractBlueprintSC
+cd ExtractBlueprintSC
 
-# Restaurer les dépendances
-dotnet restore
+# Compiler l'exécutable autonome (Linux)
+./build.sh
 
-# Compiler
-dotnet build --configuration Release
+# Ou sous Windows
+# build.bat
+
+# L'exécutable est disponible dans bin/ExtractBlueprintSC
 ```
+
+L'exécutable est autonome et ne nécessite pas l'installation de .NET Runtime.
 
 ## Utilisation
 
 ### Commande `parse` — Parser des données pré-extraites
 
 ```bash
-dotnet run --project src/ExtractBlueprintSC.Cli -- parse \
+./bin/ExtractBlueprintSC parse \
     --input /chemin/vers/extracted/dcb_json/libs/foundry/records \
     --output blueprints.json
 
@@ -104,7 +111,7 @@ dotnet run --project src/ExtractBlueprintSC.Cli -- parse \
 ### Commande `extract` — Extraire depuis Data.p4k
 
 ```bash
-dotnet run --project src/ExtractBlueprintSC.Cli -- extract \
+./bin/ExtractBlueprintSC extract \
     --input /chemin/vers/Data.p4k \
     --output blueprints.json \
     --extracted-dir extracted
@@ -256,7 +263,7 @@ services.AddTransient<IDataExporter, CsvExporter>();
 dotnet test
 
 # Tests d'intégration avec données réelles
-dotnet run --project src/ExtractBlueprintSC.Cli -- parse \
+./bin/ExtractBlueprintSC parse \
     --input /chemin/vers/extracted/dcb_json/libs/foundry/records \
     --output test_output.json
 ```
