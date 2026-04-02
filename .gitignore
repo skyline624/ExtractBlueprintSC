@@ -39,3 +39,5 @@ output/
 extracted/
 *.json
 !appsettings.json
+.claude
+.vexp

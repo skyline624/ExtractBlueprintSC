@@ -52,8 +52,8 @@ public static class ExtractCommand
 
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            var inputFile = parseResult.GetValue(inputOption)!;
-            var outputPath = parseResult.GetValue(outputOption)!;
+            var inputFile    = parseResult.GetValue(inputOption)!;
+            var outputPath   = parseResult.GetValue(outputOption)!;
             var extractedDir = parseResult.GetValue(extractedDirOption)!;
 
             if (!inputFile.Exists)
@@ -63,12 +63,6 @@ public static class ExtractCommand
             }
 
             var extractor = services.GetRequiredService<StarBreakerExtractor>();
-            if (!extractor.IsAvailable())
-            {
-                AnsiConsole.MarkupLine("[red]Erreur :[/] starbreaker-cli introuvable.");
-                AnsiConsole.MarkupLine("Téléchargez-le depuis : https://github.com/diogotr7/StarBreaker/releases");
-                return;
-            }
 
             Application.Models.ExtractionResult? result = null;
 
@@ -79,14 +73,14 @@ public static class ExtractCommand
                 {
                     try
                     {
-                        ctx.Status("Extraction du DCB depuis le P4K...");
+                        ctx.Status("Extraction et décodage du DCB depuis le P4K...");
                         var recordsDir = await extractor.ExtractDcbAsync(
                             inputFile.FullName, extractedDir, cancellationToken);
 
                         ctx.Status("Chargement des fichiers JSON...");
                         var loggerFactory = services.GetRequiredService<ILoggerFactory>();
-                        var logger = loggerFactory.CreateLogger<StarbreakerReader>();
-                        var reader = new StarbreakerReader(recordsDir, logger);
+                        var logger        = loggerFactory.CreateLogger<StarbreakerReader>();
+                        var reader        = new StarbreakerReader(recordsDir, logger);
 
                         var useCase = CreateUseCase(services, reader);
 

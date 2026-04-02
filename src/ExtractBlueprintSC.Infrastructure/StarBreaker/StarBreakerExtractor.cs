@@ -1,26 +1,22 @@
-using System.Diagnostics;
 using ExtractBlueprintSC.Core.Domain.Exceptions;
-using ExtractBlueprintSC.Infrastructure.Configuration;
+using ExtractBlueprintSC.Infrastructure.DataCore;
+using ExtractBlueprintSC.Infrastructure.P4k;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace ExtractBlueprintSC.Infrastructure.StarBreaker;
 
 public sealed class StarBreakerExtractor
 {
-    private readonly IOptions<ExtractionOptions> _options;
     private readonly ILogger<StarBreakerExtractor> _logger;
 
-    public StarBreakerExtractor(IOptions<ExtractionOptions> options, ILogger<StarBreakerExtractor> logger)
+    public StarBreakerExtractor(ILogger<StarBreakerExtractor> logger)
     {
-        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
-        _options = options;
         _logger = logger;
     }
 
-    public bool IsAvailable()
-        => File.Exists(_options.Value.GetStarBreakerCliPath());
+    /// <summary>Toujours disponible : l'implémentation est intégrée nativement.</summary>
+    public bool IsAvailable() => true;
 
     public async Task<string> ExtractDcbAsync(
         string p4kPath,
@@ -30,45 +26,43 @@ public sealed class StarBreakerExtractor
         ArgumentException.ThrowIfNullOrWhiteSpace(p4kPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDir);
 
-        var cliPath = _options.Value.GetStarBreakerCliPath();
-
         if (!File.Exists(p4kPath))
             throw new ExtractionException($"Fichier P4K introuvable : {p4kPath}");
 
-        if (!IsAvailable())
-            throw new ExtractionException(
-                $"starbreaker-cli introuvable : {cliPath}. " +
-                "Téléchargez-le depuis https://github.com/diogotr7/StarBreaker/releases");
-
-        _logger.LogInformation("Extraction P4K : {P4K} → {OutputDir}", p4kPath, outputDir);
+        _logger.LogInformation("Extraction P4K (natif) : {P4K} → {OutputDir}", p4kPath, outputDir);
 
         Directory.CreateDirectory(outputDir);
 
-        // 1. Trouver le fichier DCB dans le P4K
-        var dcbPath = await FindDcbFileAsync(p4kPath, cliPath, cancellationToken);
-        _logger.LogInformation("Fichier DCB cible : {DcbPath}", dcbPath);
+        // 1. Ouvrir l'archive et trouver le fichier DCB
+        using var p4k = P4kReader.Open(p4kPath);
 
-        // 2. Extraire le DCB du P4K
-        var dcbOutputDir = Path.Combine(outputDir, "dcb");
-        var dcbFileName = Path.GetFileName(dcbPath);
-        await RunCommandAsync(
-            [cliPath, "p4k", "extract", "--p4k", p4kPath, "--regex", $"{dcbFileName.Replace(".", "\\.")}$", "--output", dcbOutputDir],
-            cancellationToken);
+        var dcbEntry = FindDcbEntry(p4k)
+            ?? throw new ExtractionException("Fichier Game.dcb / Game2.dcb introuvable dans le P4K");
 
-        var extractedDcb = Path.Combine(dcbOutputDir, dcbPath.Replace('/', Path.DirectorySeparatorChar));
-        if (!File.Exists(extractedDcb))
-            throw new ExtractionException($"DCB extrait introuvable : {extractedDcb}");
+        _logger.LogInformation("Fichier DCB cible : {DcbName}", dcbEntry.Name);
 
-        // 3. Convertir le DCB en JSON
+        // 2. Lire et décompresser le DCB depuis le P4K
+        _logger.LogDebug("Lecture du DCB depuis le P4K...");
+        byte[] dcbBytes = await Task.Run(() => p4k.ReadEntry(dcbEntry), cancellationToken);
+
+        // 3. Parser la base de données DataCore
+        _logger.LogDebug("Parsing du DataCore ({Size:N0} octets)...", dcbBytes.Length);
+        var db = await Task.Run(() => DcbDatabase.FromBytes(dcbBytes), cancellationToken);
+
+        _logger.LogInformation("DataCore chargé : {Records} records", db.Records.Length);
+
+        // 4. Exporter tous les records en JSON
         var jsonOutputDir = Path.Combine(outputDir, "dcb_json");
-        await RunCommandAsync(
-            [cliPath, "dcb", "extract", "--dcb", extractedDcb, "--output", jsonOutputDir, "--format", "json"],
+        _logger.LogDebug("Export JSON vers : {Dir}", jsonOutputDir);
+
+        await Task.Run(
+            () => DcbJsonExporter.ExportAll(db, jsonOutputDir, cancellationToken),
             cancellationToken);
 
+        // 5. Retourner le chemin du dossier records (compatible avec StarbreakerReader)
         var recordsDir = Path.Combine(jsonOutputDir, "libs", "foundry", "records");
         if (!Directory.Exists(recordsDir))
         {
-            // Tenter un chemin alternatif
             recordsDir = jsonOutputDir;
             _logger.LogWarning("Dossier records standard introuvable, utilisation de : {Path}", recordsDir);
         }
@@ -77,66 +71,22 @@ public sealed class StarBreakerExtractor
         return recordsDir;
     }
 
-    private async Task<string> FindDcbFileAsync(string p4kPath, string cliPath, CancellationToken cancellationToken)
+    private static P4kEntry? FindDcbEntry(P4kReader p4k)
     {
-        _logger.LogDebug("Recherche du fichier DCB dans {P4K}...", p4kPath);
-
-        var output = await RunCommandWithOutputAsync(
-            [cliPath, "p4k", "list", "--p4k", p4kPath, "--filter", "*.dcb"],
-            cancellationToken);
-
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        // Chercher d'abord Game.dcb, puis Game2.dcb (insensible à la casse)
+        foreach (var entry in p4k.Entries)
         {
-            var trimmed = line.Trim();
-            if (trimmed.EndsWith("Game.dcb", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.EndsWith("Game2.dcb", StringComparison.OrdinalIgnoreCase))
-            {
-                return trimmed;
-            }
+            string name = entry.Name;
+            if (name.EndsWith("Game.dcb",  StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith("Game2.dcb", StringComparison.OrdinalIgnoreCase))
+                return entry;
         }
-
-        _logger.LogWarning("Game.dcb non trouvé, utilisation du chemin par défaut");
-        return "Data/Game2.dcb";
-    }
-
-    private async Task RunCommandAsync(string[] args, CancellationToken cancellationToken)
-    {
-        var (exitCode, _, stderr) = await ExecuteAsync(args, cancellationToken);
-        if (exitCode != 0)
-            throw new ExtractionException($"starbreaker-cli a échoué (code {exitCode}) : {stderr}");
-    }
-
-    private async Task<string> RunCommandWithOutputAsync(string[] args, CancellationToken cancellationToken)
-    {
-        var (_, stdout, _) = await ExecuteAsync(args, cancellationToken);
-        return stdout;
-    }
-
-    private async Task<(int ExitCode, string Stdout, string Stderr)> ExecuteAsync(
-        string[] args,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogDebug("Exécution : {Command}", string.Join(' ', args));
-
-        var psi = new ProcessStartInfo
+        // Fallback : tout fichier .dcb dans Data/
+        foreach (var entry in p4k.Entries)
         {
-            FileName = args[0],
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute = false,
-        };
-
-        foreach (var arg in args.Skip(1))
-            psi.ArgumentList.Add(arg);
-
-        using var process = new Process { StartInfo = psi };
-        process.Start();
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        await process.WaitForExitAsync(cancellationToken);
-
-        return (process.ExitCode, await stdoutTask, await stderrTask);
+            if (entry.Name.EndsWith(".dcb", StringComparison.OrdinalIgnoreCase))
+                return entry;
+        }
+        return null;
     }
 }
