@@ -2,14 +2,15 @@
 
 Extracteur de blueprints Star Citizen en C# / .NET 8.0.
 
-Ce projet permet d'extraire les données de crafting (blueprints, ressources, missions) depuis les fichiers de données du jeu Star Citizen (`Data.p4k` ou JSON pré-extraits via StarBreaker).
+Ce projet permet d'extraire les données de crafting (blueprints, ressources, missions) depuis les fichiers de données du jeu Star Citizen (`Data.p4k`).
 
 ## Fonctionnalités
 
-- **Extraction depuis P4K** — Extraction directe du fichier `Data.p4k` via l'outil StarBreaker CLI
-- **Parsing JSON** — Parsing des données pré-extraites par StarBreaker
+- **Extraction native depuis P4K** — Parsing ZIP64 + extensions CIG, déchiffrement AES-128-CBC, décompression zstd/deflate
+- **Parsing DCB natif** — Parsing complet du format DataCore v6, export JSON identique au CLI Rust original
 - **Export JSON** — Export des blueprints, ressources et missions au format JSON structuré
 - **CLI moderne** — Interface en ligne de commande avec `System.CommandLine` et `Spectre.Console`
+- **Zero dépendance externe** — Aucun binaire tiers requis
 
 ## Structure du projet
 
@@ -30,14 +31,16 @@ ExtractBlueprintSC/
     │   ├── UseCases/                        # ExtractBlueprintsUseCase
     │   └── Extensions/                      # AddApplication()
     │
-    ├── ExtractBlueprintSC.Infrastructure/  # Implémentations techniques
-    │   ├── Configuration/                   # ExtractionOptions (IOptions<T>)
+    ├── ExtractBlueprintSC.Infrastructure/    # Implémentations techniques
+    │   ├── Configuration/                   # ExtractionOptions
+    │   ├── P4k/                             # P4kEntry, P4kReader (ZIP64 + AES + zstd)
+    │   ├── DataCore/                        # DcbDatabase, DcbWalker, DcbJsonExporter
     │   ├── Readers/                         # StarbreakerReader (5 fichiers partiels)
     │   ├── Exporters/                       # JsonExporter
-    │   ├── StarBreaker/                     # StarBreakerExtractor (wrapper CLI)
+    │   ├── StarBreaker/                     # StarBreakerExtractor (orchestration native)
     │   └── Extensions/                      # AddInfrastructure()
     │
-    └── ExtractBlueprintSC.Cli/             # Point d'entrée CLI
+    └── ExtractBlueprintSC.Cli/              # Point d'entrée CLI
         ├── Commands/                        # ExtractCommand, ParseCommand
         ├── appsettings.json                 # Configuration
         └── Program.cs                       # Generic Host + System.CommandLine
@@ -60,20 +63,40 @@ ExtractBlueprintSC/
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                            Core                                  │
-│  (Entities + IDataReader + IDataExporter)                        │
+│  (Entities + IDataReader + IDataExporter)                       │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       Infrastructure                             │
-│  (StarbreakerReader + JsonExporter + StarBreakerExtractor)      │
+│  (P4kReader + DcbDatabase + StarbreakerReader + JsonExporter)   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## Implémentation native
+
+Le projet intègre une réécriture complète en C# des algorithmes extraits du projet [StarBreaker](https://github.com/diogotr7/StarBreaker) :
+
+### P4K Reader (`P4kReader.cs`)
+- Parsing ZIP64 avec extensions CIG (signature `0x14034B50`)
+- Déchiffrement AES-128-CBC (clé CIG hardcoded, IV zéro)
+- Décompression zstd (via `ZstdSharp.Port`) et deflate
+- Parsing du Central Directory, gestion des champs extra `0x5000/0x5002/0x5003`
+
+### DCB Parser (`DcbDatabase.cs`)
+- Parsing du header DCB v6 (120 octets)
+- Lecture de toutes les sections : struct defs, property defs, enums, data mappings, records
+- Value arrays avec accès non-aligné
+- Caches de propriétés (ordre parent-first) et détection transitive des weak pointers
+
+### DCB Walker (`DcbWalker.cs`)
+- Pré-scan des weak pointers (identique à `prescan_weak_pointers`)
+- Traversée récursive des structs avec résolution de références
+- Gestion `_RecordName_`, `_RecordId_`, `_Type_`, `_Pointer_`, `_Pointers_`
 
 ## Prérequis
 
 - **.NET 8.0 SDK** — [Télécharger](https://dotnet.microsoft.com/download/dotnet/8.0)
-- **StarBreaker CLI** (optionnel, pour l'extraction depuis P4K) — [Télécharger](https://github.com/diogotr7/StarBreaker/releases)
 
 ## Installation
 
@@ -103,7 +126,7 @@ L'exécutable est autonome et ne nécessite pas l'installation de .NET Runtime.
     --output blueprints.json
 
 # Options disponibles
---input, -i    Chemin vers le dossier records extrait par StarBreaker (requis)
+--input, -i    Chemin vers le dossier records extrait (requis)
 --output, -o   Chemin du fichier JSON de sortie (défaut: output/blueprints.json)
 --verbose, -v  Activer les logs détaillés
 ```
@@ -122,8 +145,6 @@ L'exécutable est autonome et ne nécessite pas l'installation de .NET Runtime.
 --extracted-dir, -e   Dossier temporaire pour l'extraction (défaut: extracted)
 --verbose, -v        Activer les logs détaillés
 ```
-
-**Note :** La commande `extract` nécessite que `starbreaker-cli` soit disponible dans le dossier `tools/` ou configuré dans `appsettings.json`.
 
 ## Format de sortie
 
@@ -170,7 +191,6 @@ Le fichier `appsettings.json` permet de configurer :
 ```json
 {
   "Extraction": {
-    "StarBreakerCliPath": "tools/starbreaker-cli",
     "DefaultOutputPath": "output/blueprints.json",
     "DefaultExtractedDir": "extracted",
     "JsonIndent": 2,
@@ -185,6 +205,19 @@ Le fichier `appsettings.json` permet de configurer :
   }
 }
 ```
+
+## Performances
+
+Extraction typique depuis `Data.p4k` (141 Go) :
+
+| Métrique | Valeur |
+|----------|--------|
+| Temps total | ~34s |
+| Temps système | ~10s |
+| Records DCB parsés | 111 811 |
+| Blueprints extraits | 1 044 |
+| Ressources extraites | 195 |
+| Missions extraites | 45 |
 
 ## Principes de conception
 
@@ -263,8 +296,8 @@ services.AddTransient<IDataExporter, CsvExporter>();
 dotnet test
 
 # Tests d'intégration avec données réelles
-./bin/ExtractBlueprintSC parse \
-    --input /chemin/vers/extracted/dcb_json/libs/foundry/records \
+./bin/ExtractBlueprintSC extract \
+    --input /chemin/vers/Data.p4k \
     --output test_output.json
 ```
 
@@ -275,5 +308,4 @@ Ce projet est fourni à titre éducatif. Les données extraites sont la proprié
 ## Crédits
 
 - Données Star Citizen © Cloud Imperium Games
-- Outil StarBreaker — [diogotr7/StarBreaker](https://github.com/diogotr7/StarBreaker)
-- Architecture inspirée des patterns de [Liberastra-Bot-Discord](https://github.com/...)
+- Algorithme P4K/DCB dérivé de [StarBreaker](https://github.com/diogotr7/StarBreaker) par diogotr7 — réécrit en C# natif
